@@ -3,6 +3,8 @@ import re
 DOW = r"(?:LUN|LÚN|MAR|MIÉ|MIE|JUE|VIE|SÁB|SAB|DOM)"
 MON = r"(?:ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SET|SEP|OCT|NOV|DIC)"
 
+BRUTO_TAG_RX = re.compile(r"(?i)peso\s*bruto")
+TARA_TAG_RX  = re.compile(r"(?i)\btara\b")
 DATE_RX = re.compile(rf"\b{DOW},?\s*\d{{1,2}}\s*{MON}\s*\d{{4}}\b", re.IGNORECASE)
 DATE_COMPACT_RX = re.compile(
     r"^\s*(?:%s,?\s*)?(\d{1,2})([A-Z0-9]{3})(\d{4})\s*$" % DOW, re.IGNORECASE
@@ -20,17 +22,16 @@ PESONETO_TAG_RX = re.compile(r"(?i)(peso\s*neto|neto)")
 NUMKG_RX = re.compile(
     r"([0-9]{1,3}(?:[.,\s][0-9]{3})*(?:[.,][0-9]{2})?)\s*(?:kg)?", re.IGNORECASE
 )
+NUMKG_THOUSANDS_RX = re.compile(r"(\d{1,3}(?:[.,\s]\d{3})+(?:[.,]\d{2})?)")
 
 MON_MAP = {
     "ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AGO": 8, "SET": 9, "SEP": 9, "OCT": 10, "NOV": 11, "DIC": 12
 }
 
-
 def _first_group(rx, text):
     m = rx.search(text)
     return m.group(1) if m else None
-
 
 def _fix_month_token(tok: str) -> str | None:
     t = (tok or "").upper()
@@ -44,6 +45,35 @@ def _fix_month_token(tok: str) -> str | None:
 
     return t if t in MON_MAP else None
 
+def _find_value_after_tag(lines, tag_rx, lookahead=6):
+    """
+    Busca un número (con miles y opcional decimal) en la línea del tag o en las
+    siguientes 'lookahead' líneas. Reconstruye si la parte de miles quedó en la
+    siguiente línea (p.ej., ',200.00').
+    Devuelve el valor numérico como float.
+    """
+    for i, line in enumerate(lines):
+        if tag_rx.search(line):
+            # busca en la misma línea y en las siguientes
+            for j in range(i, min(i + 1 + lookahead, len(lines))):
+                m = NUMKG_RX.search(lines[j])
+                if m:
+                    base = m.group(1).strip()
+                    joined = base
+                    # continuación tipo ",200.00" en la siguiente línea
+                    if j + 1 < len(lines):
+                        cont = re.search(r"^\s*([,\.]\s*\d{3}(?:[.,]\d{2})?)", lines[j + 1])
+                        if cont:
+                            joined += cont.group(1)
+                    val = _norm_number(joined)
+                    if val is not None:
+                        return val
+    return None
+
+def _find_bruto_tara(lines):
+    bruto = _find_value_after_tag(lines, BRUTO_TAG_RX, lookahead=8)
+    tara  = _find_value_after_tag(lines, TARA_TAG_RX,  lookahead=8)
+    return bruto, tara
 
 def _normalize_date_token(s: str) -> str | None:
     if not s:
@@ -84,7 +114,6 @@ def _normalize_date_token(s: str) -> str | None:
 
     return None
 
-
 def _normalize_time_token(s: str) -> str | None:
     if not s:
         return None
@@ -114,8 +143,6 @@ def _normalize_time_token(s: str) -> str | None:
         return None
 
     return f"{hh:02d}:{mm:02d}" + (f" {ampm}" if ampm else "")
-
-
 
 def _time_to_minutes(txt):
     if not txt:
@@ -175,9 +202,6 @@ def _scan_block(lines, anchor_pattern, window=16):
 
     return date_txt, time_txt
 
-
-
-
 def _collect_all_dates_times(lines):
     dates = []
     times = []
@@ -190,59 +214,154 @@ def _collect_all_dates_times(lines):
             times.append(t)
     return dates, times
 
-
-
 def _find_peso_neto(lines):
+    def log(msg):
+        try:
+            print(f"[PESO_NETO] {msg}")
+        except Exception:
+            pass
+
+    def window_text(start, end):
+        start = max(0, start)
+        end = min(len(lines), end)
+        txt = " ".join(lines[start:end])
+        mkg = re.search(r"(?i)\bkg\b", txt)
+        cut = txt[:mkg.start()] if mkg else txt
+        log(f"window_text({start},{end}) -> '{cut[:160]}'")
+        return cut
+
+    def reconstruct_thousands(text):
+        m = re.search(
+            r"(?<!\d)(\d{1,3})(?:[\s\.,]+)(\d{3})(?:[\s\.,]+(\d{3}))?(?:[.,]\d{2})?(?!\d)",
+            text
+        )
+        if not m:
+            return None
+        parts = [g for g in m.groups() if g]
+        try:
+            val = int("".join(parts))
+            log(f"reconstruct_thousands: parts={parts} -> val={val}")
+            return val if val >= 1000 else None
+        except Exception as e:
+            log(f"reconstruct_thousands error: {e}")
+            return None
+
+    def try_patterns(text, etiqueta):
+        log(f"try_patterns[{etiqueta}] texto='{text[:200]}'")
+
+        # 1) 'peso neto ... número'
+        m = re.search(r"(?i)peso\s*neto[^0-9]{0,15}([0-9\.\,\s]{3,})", text)
+        if m:
+            cand = m.group(1)
+            val = _norm_number(cand)
+            log(f"patrón1: cand='{cand}' -> norm={val}")
+            if val is not None and val >= 1000:
+                res = f"{int(round(val))} Kg"
+                log(f"patrón1 OK -> {res}")
+                return res
+            val2 = reconstruct_thousands(text)
+            if val2 is not None:
+                res = f"{val2} Kg"
+                log(f"patrón1(reconstruct) OK -> {res}")
+                return res
+
+        # 2) número grande genérico
+        ms = re.findall(r"(?<!\d)(\d{1,3}(?:[.,\s]?\d{3})+(?:[.,]\d{2})?|\d{5,})(?!\d)", text)
+        log(f"patrón2: candidatos={ms}")
+        best = None; best_digits = 0
+        for cand in ms:
+            digits = re.sub(r"\D", "", cand)
+            if len(digits) > best_digits:
+                best = cand; best_digits = len(digits)
+        if best:
+            val = _norm_number(best)
+            log(f"patrón2: best='{best}' -> norm={val}")
+            if val is not None and val >= 1000:
+                res = f"{int(round(val))} Kg"
+                log(f"patrón2 OK -> {res}")
+                return res
+            val2 = reconstruct_thousands(text)
+            if val2 is not None:
+                res = f"{val2} Kg"
+                log(f"patrón2(reconstruct) OK -> {res}")
+                return res
+
+        # 3) reconstrucción a la derecha de la etiqueta
+        z = text
+        a = re.search(r"(?i)peso\s*neto", z)
+        if a:
+            z = z[a.end():]
+        val2 = reconstruct_thousands(z)
+        log(f"patrón3: derecha etiqueta -> {val2}")
+        if val2 is not None:
+            res = f"{val2} Kg"
+            log(f"patrón3 OK -> {res}")
+            return res
+
+        # 4) pegar dígitos (último recurso)
+        digits = re.findall(r"\d", z)
+        if len(digits) >= 5:
+            seq = "".join(digits)
+            seq_cut = re.sub(r"(?:00)$", "", seq) if len(seq) > 5 else seq
+            log(f"patrón4: seq='{seq}' -> '{seq_cut}'")
+            try:
+                val = int(seq_cut[:7])
+                if val >= 1000:
+                    res = f"{val} Kg"
+                    log(f"patrón4 OK -> {res}")
+                    return res
+            except Exception as e:
+                log(f"patrón4 error: {e}")
+
+        log("try_patterns: sin resultados")
+        return None
+
+    # A) ventana primaria: donde diga “Peso Neto”
     for i, line in enumerate(lines):
         if PESONETO_TAG_RX.search(line):
-            m = NUMKG_RX.search(line)
-            if m:
-                base = m.group(1).strip()
-                joined = base
-                for k in range(1, 4):
-                    if i + k >= len(lines):
-                        break
-                    cont = re.search(r"^\s*([,\.]\s*\d{3}(?:[.,]\d{2})?)", lines[i + k])
-                    if cont:
-                        joined += cont.group(1)
-                        break
-                val = _norm_number(joined)
-                if val is not None and val >= 500:
-                    return f"{int(round(val))} Kg"
-                return base + (" Kg" if "kg" in line.lower() else " Kg")
-            for j in range(i + 1, min(i + 6, len(lines))):
-                m2 = NUMKG_RX.search(lines[j])
-                if m2:
-                    base = m2.group(1).strip()
-                    joined = base
-                    if j + 1 < len(lines):
-                        cont = re.search(r"^\s*([,\.]\s*\d{3}(?:[.,]\d{2})?)", lines[j + 1])
-                        if cont:
-                            joined += cont.group(1)
-                    val = _norm_number(joined)
-                    if val is not None and val >= 500:
-                        return f"{int(round(val))} Kg"
-                    return base + (" Kg" if "kg" in lines[j].lower() else " Kg")
+            log(f"Etiqueta 'Peso Neto' encontrada en línea {i}: '{line}'")
+            txt = window_text(i, i + 6)
+            res = try_patterns(txt, f"NETO@{i}")
+            if res:
+                log(f"Resultado NETO directo -> {res}")
+                return res
+
+    # B) fallback: cerca de “Importe”
     imp_idx = None
     for i, line in enumerate(lines):
-        if re.search(r"(?i)importe", line):
+        if re.search(r"(?i)\bimporte\b", line):
             imp_idx = i
+            log(f"Etiqueta 'Importe' encontrada en línea {i}: '{line}'")
             break
     if imp_idx is not None:
-        for j in range(max(0, imp_idx - 12), imp_idx):
-            m = NUMKG_RX.search(lines[j])
-            if m:
-                base = m.group(1).strip()
-                joined = base
-                if j + 1 < len(lines):
-                    cont = re.search(r"^\s*([,\.]\s*\d{3}(?:[.,]\d{2})?)", lines[j + 1])
-                    if cont:
-                        joined += cont.group(1)
-                val = _norm_number(joined)
-                if val is not None and val >= 500:
-                    return f"{int(round(val))} Kg"
-                return base + (" Kg" if "kg" in lines[j].lower() else " Kg")
+        txt = window_text(imp_idx - 10, imp_idx + 1)
+        res = try_patterns(txt, f"IMPORTE@{imp_idx}")
+        if res:
+            log(f"Resultado por IMPORTE -> {res}")
+            return res
+
+    # C) último intento: todo el texto
+    txt = window_text(0, len(lines))
+    res = try_patterns(txt, "GLOBAL")
+    if res:
+        log(f"Resultado GLOBAL -> {res}")
+        return res
+
+    # D) cálculo por Bruto – Tara
+    bruto, tara = _find_bruto_tara(lines)
+    log(f"Bruto/Tara detectados -> bruto={bruto}, tara={tara}")
+    if bruto is not None and tara is not None:
+        neto_calc = bruto - tara
+        log(f"Neto calculado = {neto_calc}")
+        if neto_calc >= 1000:
+            res = f"{int(round(neto_calc))} Kg"
+            log(f"Resultado por cálculo -> {res}")
+            return res
+
+    log("No se pudo determinar Peso Neto")
     return None
+
+
 
 
 def _normalize_date_token_loose(s: str) -> str | None:
