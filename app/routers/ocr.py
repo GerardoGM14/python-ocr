@@ -10,6 +10,7 @@ from ..utils.storage import save_bytes
 from ..services.ocr_run import run_ocr
 from ..services.parse_ticket import parse_ticket_text
 from .. import crud
+from .. import schemas
 
 router = APIRouter()
 
@@ -51,7 +52,9 @@ def _process(image_bytes: bytes, filename: str, content_type: str, db: Session):
         "placa": parsed.get("placa"),
         "peso_neto": parsed.get("peso_neto"),
         "ingreso_fecha": parsed.get("ingreso_fecha"),
+        "ingreso_hora": parsed.get("ingreso_hora"),
         "salida_fecha": parsed.get("salida_fecha"),
+        "salida_hora": parsed.get("salida_hora"),
         "processing_time_ms": elapsed_ms,
         "debug": {
             "best_preset": ocr.get("best_preset"),
@@ -107,3 +110,15 @@ async def ocr_by_id(payload: IdIn, db: Session = Depends(get_db)):
     with open(path, "rb") as f:
         raw = f.read()
     return _process(raw, safe, "image/unknown", db)
+
+@router.get("/documents", response_model=schemas.DocumentListOut)
+def list_documents(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    items, total = crud.list_documents(db, skip=skip, limit=limit)
+    return {"items": items, "total": total}
+
+@router.get("/documents/{doc_id}", response_model=schemas.DocumentOut)
+def get_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = crud.get_document(db, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return doc
