@@ -51,13 +51,33 @@ def normalize_weight_kg_text(s: str) -> str:
 def normalize_weight_to_intkg(s: str) -> str | None:
     if not s:
         return None
-    m = re.search(r"([0-9]{1,3}(?:[.\s,][0-9]{3})*(?:[.,][0-9]{2})?)", s)
+    m = re.search(r"([0-9]{1,3}(?:[.,\s][0-9]{3})*(?:[.,][0-9]{2})?|[0-9]+)", s)
     if not m:
         return None
-    t = m.group(1).replace(" ", "")
-    t = t.replace(".", "").replace(",", ".")
+    t = m.group(1).strip().replace(" ", "")
+    if "," in t and "." in t:
+        last_comma = t.rfind(",")
+        last_dot = t.rfind(".")
+        if last_dot > last_comma:
+            num = t.replace(",", "")  # coma = miles, punto = decimal
+        else:
+            num = t.replace(".", "").replace(",", ".")  # punto = miles, coma = decimal
+    elif "," in t:
+        if re.search(r",[0-9]{2}$", t):
+            num = t.replace(".", "").replace(",", ".")  # coma = decimal
+        else:
+            num = t.replace(",", "")  # coma = miles
+    else:
+        # solo puntos: si hay más de un punto, dejamos solo el último como decimal
+        if t.count(".") > 1:
+            head, _, tail = t.rpartition(".")
+            num = head.replace(".", "") + "." + tail
+        else:
+            num = t
     try:
-        kg = int(round(float(t)))
+        value = float(num)
+        kg = int(round(value))
         return f"{kg} Kg"
-    except ValueError:
+    except Exception:
         return None
+

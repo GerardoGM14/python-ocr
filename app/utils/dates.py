@@ -66,9 +66,12 @@ def to_iso_lima(date_text: str, time_text: str | None = None):
 def format_ddmmyyyy(date_text: str) -> str | None:
     d = parse_spanish_date(date_text or "")
     if not d:
+        d = parse_ticketish_date(date_text or "")
+    if not d:
         return None
     dd, mm, yyyy = d
     return f"{dd:02d}/{mm:02d}/{yyyy}"
+
 
 def format_time_pmam(time_text: str) -> str | None:
     if not time_text:
@@ -85,3 +88,25 @@ def format_time_pmam(time_text: str) -> str | None:
     elif "a" in low:
         ampm = "a.m"
     return f"{hh:02d}:{mm:02d}" + (f" {ampm}" if ampm else "")
+
+def _fix_month_token(tok: str):
+    if not tok:
+        return None
+    t = tok.upper().replace("0","O").replace("4","A").replace("6","G")
+    t = t.replace("Í","I").replace("Á","A").replace("Ú","U").replace("É","E").replace("Ó","O")
+    if t == "SET":
+        t = "SEP"
+    return _MON_MAP.get(t)
+
+def parse_ticketish_date(text: str):
+    if not text:
+        return None
+    m = re.search(r"(?:(?:LUN|LÚN|MAR|MIÉ|MIE|JUE|VIE|SÁB|SAB|DOM)[, ]*)?(\d{1,2})\s*([A-Z0-9]{3})\s*(\d{4})", text, re.IGNORECASE)
+    if not m:
+        return None
+    dd = int(m.group(1))
+    mon = _fix_month_token(m.group(2))
+    yyyy = int(m.group(3))
+    if not mon:
+        return None
+    return dd, mon, yyyy
