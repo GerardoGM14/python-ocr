@@ -45,16 +45,26 @@ def _process(image_bytes: bytes, filename: str, content_type: str, db: Session):
         blocks=ocr.get("blocks", []),
     )
     parsed = parse_ticket_text(ocr.get("full_text") or "")
+
+    from ..utils.textnorm import normalize_weight_to_intkg
+    from ..utils.dates import format_ddmmyyyy, format_time_pmam
+
+    peso_fmt = normalize_weight_to_intkg(parsed.get("peso_neto"))
+    ingreso_fecha_fmt = format_ddmmyyyy(parsed.get("ingreso_fecha"))
+    salida_fecha_fmt = format_ddmmyyyy(parsed.get("salida_fecha"))
+    ingreso_hora_fmt = format_time_pmam(parsed.get("ingreso_hora"))
+    salida_hora_fmt = format_time_pmam(parsed.get("salida_hora"))
+
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     return {
         "document_id": doc.id,
         "ticket_num": parsed.get("ticket_num"),
         "placa": parsed.get("placa"),
-        "peso_neto": parsed.get("peso_neto"),
-        "ingreso_fecha": parsed.get("ingreso_fecha"),
-        "ingreso_hora": parsed.get("ingreso_hora"),
-        "salida_fecha": parsed.get("salida_fecha"),
-        "salida_hora": parsed.get("salida_hora"),
+        "peso_neto": peso_fmt,
+        "ingreso_fecha": ingreso_fecha_fmt,
+        "ingreso_hora": ingreso_hora_fmt,
+        "salida_fecha": salida_fecha_fmt,
+        "salida_hora": salida_hora_fmt,
         "processing_time_ms": elapsed_ms,
         "debug": {
             "best_preset": ocr.get("best_preset"),
@@ -63,6 +73,7 @@ def _process(image_bytes: bytes, filename: str, content_type: str, db: Session):
             "variant_metrics": ocr.get("variant_metrics"),
         },
     }
+
 
 @router.post("/ocr")
 async def ocr_single(file: UploadFile = File(...), db: Session = Depends(get_db)):

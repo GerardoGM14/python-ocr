@@ -62,3 +62,26 @@ def to_iso_lima(date_text: str, time_text: str | None = None):
         return dt.isoformat()
     except ValueError:
         return None
+
+def format_ddmmyyyy(date_text: str) -> str | None:
+    d = parse_spanish_date(date_text or "")
+    if not d:
+        return None
+    dd, mm, yyyy = d
+    return f"{dd:02d}/{mm:02d}/{yyyy}"
+
+def format_time_pmam(time_text: str) -> str | None:
+    if not time_text:
+        return None
+    m = re.search(r"(\d{1,2})[:\-](\d{2})", time_text)
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    ampm = ""
+    low = time_text.lower().replace(" ", "")
+    if "p" in low:
+        ampm = "p.m"
+    elif "a" in low:
+        ampm = "a.m"
+    return f"{hh:02d}:{mm:02d}" + (f" {ampm}" if ampm else "")

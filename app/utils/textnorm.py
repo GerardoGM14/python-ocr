@@ -47,3 +47,17 @@ def normalize_weight_kg_text(s: str) -> str:
         return None
     num = standardize_decimal(m.group(1))
     return f"{num} Kg"
+
+def normalize_weight_to_intkg(s: str) -> str | None:
+    if not s:
+        return None
+    m = re.search(r"([0-9]{1,3}(?:[.\s,][0-9]{3})*(?:[.,][0-9]{2})?)", s)
+    if not m:
+        return None
+    t = m.group(1).replace(" ", "")
+    t = t.replace(".", "").replace(",", ".")
+    try:
+        kg = int(round(float(t)))
+        return f"{kg} Kg"
+    except ValueError:
+        return None
