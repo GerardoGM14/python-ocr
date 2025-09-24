@@ -51,17 +51,32 @@ def run_ocr(image_bytes: bytes) -> Dict[str, Any]:
     return results
 
 def run_ocr_with_yolo(image_bytes: bytes, yolo_model_path: str) -> Dict[str, Any]:
+    """
+    Run OCR on specific regions detected by YOLO.
+
+    Args:
+        image_bytes (bytes): The input image in bytes.
+        yolo_model_path (str): Path to the YOLO model.
+
+    Returns:
+        Dict[str, Any]: OCR results for each detected region.
+    """
+    # Initialize YOLO detector
     detector = YOLODetector(yolo_model_path)
+
+    # Decode the image from bytes
     img = imdecode_bytes(image_bytes)
+
+    # Detect regions using YOLO
     regions = detector.detect_regions(img)
 
-    # Recortar regiones detectadas y aplicar OCR
+    # Process each detected region with OCR
     ocr_results = []
     for region in regions:
         x1, y1, x2, y2 = region['bbox']
-        cropped_img = img[y1:y2, x1:x2]
-        rgb = _ensure_rgb(cropped_img)
-        ocr_blocks = read_ndarray(rgb)
+        cropped_img = img[y1:y2, x1:x2]  # Crop the region
+        rgb = _ensure_rgb(cropped_img)  # Ensure the image is in RGB format
+        ocr_blocks = read_ndarray(rgb)  # Perform OCR on the cropped region
         ocr_results.append({
             "region": region,
             "ocr_blocks": _to_blocks(ocr_blocks)
@@ -71,3 +86,16 @@ def run_ocr_with_yolo(image_bytes: bytes, yolo_model_path: str) -> Dict[str, Any
         "regions": regions,
         "ocr_results": ocr_results
     }
+
+def imdecode_bytes(image_bytes: bytes) -> np.ndarray:
+    """
+    Decode an image from bytes to a NumPy array.
+
+    Args:
+        image_bytes (bytes): The input image in bytes.
+
+    Returns:
+        np.ndarray: The decoded image as a NumPy array.
+    """
+    image_array = np.frombuffer(image_bytes, np.uint8)
+    return cv2.imdecode(image_array, cv2.IMREAD_COLOR)
