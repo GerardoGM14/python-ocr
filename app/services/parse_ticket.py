@@ -45,13 +45,17 @@ def _fix_month_token(tok: str) -> str | None:
 
     return t if t in MON_MAP else None
 
+def present_peso_neto(peso_str: str | None) -> str | None:
+    if not peso_str:
+        return None
+    # toma solo dígitos de cualquier variante ('41,510.00 Kg' -> '4151000' / '45950 Kg' -> '45950')
+    digits = re.sub(r"\D", "", peso_str)
+    if not digits:
+        return None
+    # si quedaron dígitos, formatea tal cual
+    return f"{int(digits)} Kg"
+
 def _find_value_after_tag(lines, tag_rx, lookahead=6):
-    """
-    Busca un número (con miles y opcional decimal) en la línea del tag o en las
-    siguientes 'lookahead' líneas. Reconstruye si la parte de miles quedó en la
-    siguiente línea (p.ej., ',200.00').
-    Devuelve el valor numérico como float.
-    """
     for i, line in enumerate(lines):
         if tag_rx.search(line):
             # busca en la misma línea y en las siguientes
@@ -405,7 +409,6 @@ def parse_ticket_text(full_text: str):
     text = full_text or ""
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
-    # Ticket
     ticket_num = _first_group(TICKET_RX, text)
     if not ticket_num:
         for ln in lines[:80]:
@@ -415,7 +418,6 @@ def parse_ticket_text(full_text: str):
             if mnum:
                 ticket_num = mnum.group(1)
                 break
-
     if not ticket_num:
         for ln in lines:
             if re.search(r"(?i)(kg|neto|bruto|tara)", ln):
@@ -425,38 +427,29 @@ def parse_ticket_text(full_text: str):
                 ticket_num = mnum.group(1)
                 break
 
-    # Placa
     placa = _first_group(PLACA_RX, text)
 
-    # Fechas y horas
     ingreso_fecha, ingreso_hora = _scan_block(lines, r"(?i)peso\s*previo|previo", window=20)
     salida_fecha, salida_hora = _scan_block(lines, r"(?i)último\s*peso|ultimo\s*peso", window=20)
 
     if not (ingreso_fecha and ingreso_hora) or not (salida_fecha and salida_hora):
         dates, times = _collect_all_dates_times(lines)
-
-        # Preferir horas con a.m./p.m.
         has_ampm = lambda t: bool(re.search(r"(?i)[ap]\.?\s*m\.?", t))
         times_ampm = [t for t in times if has_ampm(t)]
         source = times_ampm if times_ampm else times
-
         mins_all = [(t, _time_to_minutes(t)) for t in source]
         mins = [(t, m) for (t, m) in mins_all if m is not None and 0 < m <= 23 * 60 + 59]
         mins.sort(key=lambda x: x[1])
-
         if not ingreso_hora and mins:
             ingreso_hora = mins[0][0]
         if not salida_hora and mins:
             salida_hora = mins[-1][0]
-
         if dates:
             if not ingreso_fecha:
                 ingreso_fecha = dates[0]
             if not salida_fecha:
                 salida_fecha = dates[-1] if len(dates) > 1 else dates[0]
 
-
-    # Meridianos
     def _meridian(h: str | None) -> str | None:
         if not h:
             return None
@@ -469,10 +462,10 @@ def parse_ticket_text(full_text: str):
     if salida_hora and not out_mer and in_mer:
         salida_hora = f"{salida_hora} {in_mer}"
 
-    # Peso neto
     peso_neto = _find_peso_neto(lines)
     if peso_neto and not peso_neto.lower().endswith("kg"):
         peso_neto = peso_neto.strip() + " Kg"
+    peso_neto = present_peso_neto(peso_neto)
 
     return {
         "ticket_num": ticket_num,
@@ -483,3 +476,4 @@ def parse_ticket_text(full_text: str):
         "salida_fecha": salida_fecha,
         "salida_hora": salida_hora,
     }
+

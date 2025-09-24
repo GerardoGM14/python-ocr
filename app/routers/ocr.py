@@ -2,7 +2,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List
-import os, time, httpx
+from datetime import datetime
+import os, time, httpx, re
 
 from ..database import SessionLocal
 from ..config import settings
@@ -11,6 +12,39 @@ from ..services.ocr_run import run_ocr
 from ..services.parse_ticket import parse_ticket_text
 from .. import crud
 from .. import schemas
+
+def _kg_to_int_str(s: str | None) -> str | None:
+    if not s:
+        return None
+    digits = re.sub(r"\D", "", s)
+    return str(int(digits)) if digits else None
+
+def _combine_date_time(date_str: str | None, time_str: str | None) -> str | None:
+    """
+    date_str: 'dd/mm/yyyy'
+    time_str: 'HH:MM' ó 'HH:MM a.m/p.m'
+    return:  'dd-mm-yyyy HH:MM:00' (24h)
+    """
+    if not date_str or not time_str:
+        return None
+
+    # normaliza fecha a 'dd-mm-yyyy'
+    ds = date_str.strip().replace("/", "-")
+
+    # extrae hora y posible am/pm
+    m = re.match(r"^\s*(\d{2}):(\d{2})(?:\s*([ap])\.?\s*m\.?)?\s*$", time_str, re.IGNORECASE)
+    if not m:
+        return None
+    hh = int(m.group(1)); mm = int(m.group(2))
+    ap = (m.group(3) or "").lower()
+
+    # convierte a 24h si hay am/pm
+    if ap == "p" and hh < 12:
+        hh += 12
+    if ap == "a" and hh == 12:
+        hh = 0
+
+    return f"{ds} {hh:02d}:{mm:02d}:00"
 
 router = APIRouter()
 
@@ -46,25 +80,26 @@ def _process(image_bytes: bytes, filename: str, content_type: str, db: Session):
     )
     parsed = parse_ticket_text(ocr.get("full_text") or "")
 
-    from ..utils.textnorm import normalize_weight_to_intkg
+    ##from ..utils.textnorm import normalize_weight_to_intkg
     from ..utils.dates import format_ddmmyyyy, format_time_pmam
 
-    peso_fmt = normalize_weight_to_intkg(parsed.get("peso_neto"))
+    peso_fmt = _kg_to_int_str(parsed.get("peso_neto"))
     ingreso_fecha_fmt = format_ddmmyyyy(parsed.get("ingreso_fecha"))
     salida_fecha_fmt = format_ddmmyyyy(parsed.get("salida_fecha"))
     ingreso_hora_fmt = format_time_pmam(parsed.get("ingreso_hora"))
     salida_hora_fmt = format_time_pmam(parsed.get("salida_hora"))
+
+    ingreso_fecha_hora = _combine_date_time(ingreso_fecha_fmt, ingreso_hora_fmt)
+    salida_fecha_hora  = _combine_date_time(salida_fecha_fmt,  salida_hora_fmt)
 
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     return {
         "document_id": doc.id,
         "ticket_num": parsed.get("ticket_num"),
         "placa": parsed.get("placa"),
-        "peso_neto": peso_fmt,
-        "ingreso_fecha": ingreso_fecha_fmt,
-        "ingreso_hora": ingreso_hora_fmt,
-        "salida_fecha": salida_fecha_fmt,
-        "salida_hora": salida_hora_fmt,
+        "peso_neto": peso_fmt,  # <-- sin 'Kg'
+        "ingreso_fecha_hora": ingreso_fecha_hora,  # <-- nuevo campo combinado
+        "salida_fecha_hora":  salida_fecha_hora,   # <-- nuevo campo combinado
         "processing_time_ms": elapsed_ms,
         "debug": {
             "best_preset": ocr.get("best_preset"),
