@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 from .preprocess import build_variants
 from .ocr_reader import read_ndarray
+from .yolo_detector import YOLODetector
 
 def _ensure_rgb(img):
     if img is None:
@@ -48,3 +49,25 @@ def run_ocr(image_bytes: bytes) -> Dict[str, Any]:
             }
     results["variant_metrics"] = [{"preset": n, "confidence_mean": float(c), "time_ms": float(t)} for n, c, t in metrics]
     return results
+
+def run_ocr_with_yolo(image_bytes: bytes, yolo_model_path: str) -> Dict[str, Any]:
+    detector = YOLODetector(yolo_model_path)
+    img = imdecode_bytes(image_bytes)
+    regions = detector.detect_regions(img)
+
+    # Recortar regiones detectadas y aplicar OCR
+    ocr_results = []
+    for region in regions:
+        x1, y1, x2, y2 = region['bbox']
+        cropped_img = img[y1:y2, x1:x2]
+        rgb = _ensure_rgb(cropped_img)
+        ocr_blocks = read_ndarray(rgb)
+        ocr_results.append({
+            "region": region,
+            "ocr_blocks": _to_blocks(ocr_blocks)
+        })
+
+    return {
+        "regions": regions,
+        "ocr_results": ocr_results
+    }

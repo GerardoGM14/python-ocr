@@ -1,0 +1,4 @@
+train: dataset/images  # Ruta a las imágenes de entrenamiento
+val: dataset/images    # Ruta a las imágenes de validación
+nc: 5                  # Número de clases
+names: ["ticket_num", "placa", "peso_neto", "ingreso_fecha_hora", "salida_fecha_hora"]
